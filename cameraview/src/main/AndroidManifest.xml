@@ -23,6 +23,6 @@
 
     <uses-sdk tools:overrideLibrary="com.otaliastudios.opengl" />
 
-    <application/>
+    <application />
 
 </manifest>

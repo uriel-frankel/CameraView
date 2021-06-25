@@ -1,17 +1,27 @@
 package com.otaliastudios.cameraview.demo
 
-import android.animation.ValueAnimator
+import android.Manifest.permission.*
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.pm.PackageManager.FEATURE_CAMERA
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.graphics.*
+import android.os.Build
+import android.os.Build.VERSION.SDK_INT
 import android.os.Bundle
+import android.os.Environment
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Toast
+import android.widget.ToggleButton
+import androidx.annotation.Nullable
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.bumptech.glide.Glide
+import com.bumptech.glide.request.RequestOptions
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.otaliastudios.cameraview.*
 import com.otaliastudios.cameraview.controls.Facing
@@ -20,9 +30,10 @@ import com.otaliastudios.cameraview.controls.Preview
 import com.otaliastudios.cameraview.filter.Filters
 import com.otaliastudios.cameraview.frame.Frame
 import com.otaliastudios.cameraview.frame.FrameProcessor
-import java.io.ByteArrayOutputStream
-import java.io.File
+import java.io.*
+import java.text.SimpleDateFormat
 import java.util.*
+
 
 class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Callback {
 
@@ -32,6 +43,8 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
         private const val DECODE_BITMAP = false
     }
 
+    private val REQUEST_CODE = 2296
+
     private val camera: CameraView by lazy { findViewById(R.id.camera) }
     private val controlPanel: ViewGroup by lazy { findViewById(R.id.controls) }
     private var captureTime: Long = 0
@@ -39,9 +52,21 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
     private var currentFilter = 0
     private val allFilters = Filters.values()
 
+    private var captureVideo: View? = null
+    private var capturePicture: View? = null
+    private var stopVideo: View? = null
+    private var toggle: ToggleButton? = null
     override fun onCreate(savedInstanceState: Bundle?) {
+
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
+        dealWithStorage()
+        captureVideo = findViewById<View>(R.id.captureVideo)
+        capturePicture = findViewById<View>(R.id.capturePicture)
+        stopVideo = findViewById<View>(R.id.stopVideo)
+        stopVideo?.setOnClickListener(this)
+        toggle = findViewById(R.id.toggle)
+        this.supportActionBar?.hide()
         CameraLogger.setLogLevel(CameraLogger.LEVEL_VERBOSE)
         camera.setLifecycleOwner(this)
         camera.addCameraListener(Listener())
@@ -55,20 +80,29 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
                     LOG.v("Frame delayMillis:", delay, "FPS:", 1000 / delay)
                     if (DECODE_BITMAP) {
                         if (frame.format == ImageFormat.NV21
-                                && frame.dataClass == ByteArray::class.java) {
+                            && frame.dataClass == ByteArray::class.java
+                        ) {
                             val data = frame.getData<ByteArray>()
-                            val yuvImage = YuvImage(data,
-                                    frame.format,
-                                    frame.size.width,
-                                    frame.size.height,
-                                    null)
+                            val yuvImage = YuvImage(
+                                data,
+                                frame.format,
+                                frame.size.width,
+                                frame.size.height,
+                                null
+                            )
                             val jpegStream = ByteArrayOutputStream()
-                            yuvImage.compressToJpeg(Rect(0, 0,
+                            yuvImage.compressToJpeg(
+                                Rect(
+                                    0, 0,
                                     frame.size.width,
-                                    frame.size.height), 100, jpegStream)
+                                    frame.size.height
+                                ), 100, jpegStream
+                            )
                             val jpegByteArray = jpegStream.toByteArray()
-                            val bitmap = BitmapFactory.decodeByteArray(jpegByteArray,
-                                    0, jpegByteArray.size)
+                            val bitmap = BitmapFactory.decodeByteArray(
+                                jpegByteArray,
+                                0, jpegByteArray.size
+                            )
                             bitmap.toString()
                         }
                     }
@@ -78,52 +112,53 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
         findViewById<View>(R.id.edit).setOnClickListener(this)
         findViewById<View>(R.id.capturePicture).setOnClickListener(this)
         findViewById<View>(R.id.capturePictureSnapshot).setOnClickListener(this)
-        findViewById<View>(R.id.captureVideo).setOnClickListener(this)
+        captureVideo?.setOnClickListener(this)
         findViewById<View>(R.id.captureVideoSnapshot).setOnClickListener(this)
         findViewById<View>(R.id.toggleCamera).setOnClickListener(this)
         findViewById<View>(R.id.changeFilter).setOnClickListener(this)
         val group = controlPanel.getChildAt(0) as ViewGroup
-        val watermark = findViewById<View>(R.id.watermark)
+        val galleryImage = findViewById<View>(R.id.gallery)
+        galleryImage.setOnClickListener {
+            startActivity(Intent(this@CameraActivity, ImageSelectionActivity::class.java))
+        }
+
         val options: List<Option<*>> = listOf(
-                // Layout
-                Option.Width(), Option.Height(),
-                // Engine and preview
-                Option.Mode(), Option.Engine(), Option.Preview(),
-                // Some controls
-                Option.Flash(), Option.WhiteBalance(), Option.Hdr(),
-                Option.PictureMetering(), Option.PictureSnapshotMetering(),
-                Option.PictureFormat(),
-                // Video recording
-                Option.PreviewFrameRate(), Option.VideoCodec(), Option.Audio(), Option.AudioCodec(),
-                // Gestures
-                Option.Pinch(), Option.HorizontalScroll(), Option.VerticalScroll(),
-                Option.Tap(), Option.LongTap(),
-                // Watermarks
-                Option.OverlayInPreview(watermark),
-                Option.OverlayInPictureSnapshot(watermark),
-                Option.OverlayInVideoSnapshot(watermark),
-                // Frame Processing
-                Option.FrameProcessingFormat(),
-                // Other
-                Option.Grid(), Option.GridColor(), Option.UseDeviceOrientation()
+            // Layout
+            Option.Width(), Option.Height(),
+            // Engine and preview
+            Option.Mode(), Option.Engine(), Option.Preview(),
+            // Some controls
+            Option.Flash(), Option.WhiteBalance(), Option.Hdr(),
+            Option.PictureMetering(), Option.PictureSnapshotMetering(),
+            Option.PictureFormat(),
+            // Video recording
+            Option.PreviewFrameRate(), Option.VideoCodec(), Option.Audio(), Option.AudioCodec(),
+            // Gestures
+            Option.Pinch(), Option.HorizontalScroll(), Option.VerticalScroll(),
+            Option.Tap(), Option.LongTap(),
+            // Watermarks
+            // Frame Processing
+            Option.FrameProcessingFormat(),
+            // Other
+            Option.Grid(), Option.GridColor(), Option.UseDeviceOrientation()
         )
         val dividers = listOf(
-                // Layout
-                false, true,
-                // Engine and preview
-                false, false, true,
-                // Some controls
-                false, false, false, false, false, true,
-                // Video recording
-                false, false, false, true,
-                // Gestures
-                false, false, false, false, true,
-                // Watermarks
-                false, false, true,
-                // Frame Processing
-                true,
-                // Other
-                false, false, true
+            // Layout
+            false, true,
+            // Engine and preview
+            false, false, true,
+            // Some controls
+            false, false, false, false, false, true,
+            // Video recording
+            false, false, false, true,
+            // Gestures
+            false, false, false, false, true,
+            // Watermarks
+            false, false, true,
+            // Frame Processing
+            true,
+            // Other
+            false, false, true
         )
         for (i in options.indices) {
             val view = OptionView<Any>(this)
@@ -135,19 +170,59 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
             BottomSheetBehavior.from(controlPanel).state = BottomSheetBehavior.STATE_HIDDEN
         }
 
-        // Animate the watermark just to show we record the animation in video snapshots
-        val animator = ValueAnimator.ofFloat(1f, 0.8f)
-        animator.duration = 300
-        animator.repeatCount = ValueAnimator.INFINITE
-        animator.repeatMode = ValueAnimator.REVERSE
-        animator.addUpdateListener { animation ->
-            val scale = animation.animatedValue as Float
-            watermark.scaleX = scale
-            watermark.scaleY = scale
-            watermark.rotation = watermark.rotation + 2
+        toggle?.setOnCheckedChangeListener { _, isChecked ->
+            camera.set(
+                if (isChecked) {
+                    Mode.VIDEO
+                } else {
+                    Mode.PICTURE
+                }
+            )
+            setIcons()
         }
-        animator.start()
     }
+
+    private fun dealWithStorage() {
+        if (!checkPermission()) {
+            requestPermission()
+        }
+    }
+
+    private fun checkPermission(): Boolean {
+        val result: Int =
+            ContextCompat.checkSelfPermission(this, READ_EXTERNAL_STORAGE)
+        val result1: Int =
+            ContextCompat.checkSelfPermission(this, WRITE_EXTERNAL_STORAGE)
+        val result2: Int =
+            ContextCompat.checkSelfPermission(this, FEATURE_CAMERA)
+        val result3: Int =
+            ContextCompat.checkSelfPermission(this, RECORD_AUDIO)
+        return result == PERMISSION_GRANTED && result1 == PERMISSION_GRANTED && result2 == PERMISSION_GRANTED && result3 == PERMISSION_GRANTED
+    }
+
+
+    private fun requestPermission() {
+//        if (SDK_INT >= Build.VERSION_CODES.R) {
+//            try {
+//                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+//                intent.addCategory("android.intent.category.DEFAULT")
+//                intent.data = Uri.parse(String.format("package:%s", applicationContext.packageName))
+//                startActivityForResult(intent, 2296)
+//            } catch (e: Exception) {
+//                val intent = Intent()
+//                intent.action = Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+//                startActivityForResult(intent, 2296)
+//            }
+//        } else {
+        //below android 11
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, CAMERA, RECORD_AUDIO),
+            REQUEST_CODE
+        )
+//        }
+    }
+
 
     private fun message(content: String, important: Boolean) {
         if (important) {
@@ -165,6 +240,8 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
             for (i in 0 until group.childCount) {
                 val view = group.getChildAt(i) as OptionView<*>
                 view.onCameraOpened(camera, options)
+                Log.d("uriel", "camera opened")
+                setIcons()
             }
         }
 
@@ -180,25 +257,51 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
                 return
             }
 
-            // This can happen if picture was taken with a gesture.
-            val callbackTime = System.currentTimeMillis()
-            if (captureTime == 0L) captureTime = callbackTime - 300
-            LOG.w("onPictureTaken called! Launching activity. Delay:", callbackTime - captureTime)
-            PicturePreviewActivity.pictureResult = result
-            val intent = Intent(this@CameraActivity, PicturePreviewActivity::class.java)
-            intent.putExtra("delay", callbackTime - captureTime)
-            startActivity(intent)
-            captureTime = 0
-            LOG.w("onPictureTaken called! Launched activity.")
+            val photoFile = createFileWithExtentionOf("jpg")
+
+            CameraUtils.writeToFile(result.data, photoFile) { f ->
+                changeGalleryImage()
+            }
+
+
         }
 
         override fun onVideoTaken(result: VideoResult) {
             super.onVideoTaken(result)
-            LOG.w("onVideoTaken called! Launching activity.")
-            VideoPreviewActivity.videoResult = result
-            val intent = Intent(this@CameraActivity, VideoPreviewActivity::class.java)
-            startActivity(intent)
-            LOG.w("onVideoTaken called! Launched activity.")
+            val outFile = createFileWithExtentionOf("mp4")
+            moveFile(result.file, outFile)
+            changeGalleryImage()
+            setIcons()
+        }
+
+        private fun moveFile(inputFile: File, outputPath: File) {
+            var `in`: InputStream? = null
+            var out: OutputStream? = null
+            try {
+
+                //create output directory if it doesn't exist
+                `in` = FileInputStream(inputFile)
+                out = FileOutputStream(outputPath)
+                val buffer = ByteArray(1024)
+                var read: Int
+                while (`in`.read(buffer).also { read = it } != -1) {
+                    out.write(buffer, 0, read)
+                }
+                `in`.close()
+                `in` = null
+
+                // write the output file
+                out.flush()
+                out.close()
+                out = null
+
+                // delete the original file
+                inputFile.delete()
+            } catch (e: FileNotFoundException) {
+                Log.e("tag", e.message!!)
+            } catch (e: Exception) {
+                Log.e("tag", e.message!!)
+            }
         }
 
         override fun onVideoRecordingStart() {
@@ -212,7 +315,11 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
             LOG.w("onVideoRecordingEnd!")
         }
 
-        override fun onExposureCorrectionChanged(newValue: Float, bounds: FloatArray, fingers: Array<PointF>?) {
+        override fun onExposureCorrectionChanged(
+            newValue: Float,
+            bounds: FloatArray,
+            fingers: Array<PointF>?
+        ) {
             super.onExposureCorrectionChanged(newValue, bounds, fingers)
             message("Exposure correction:$newValue", false)
         }
@@ -223,12 +330,36 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
         }
     }
 
+    private fun createFileWithExtentionOf(ext: String): File {
+        val f = FileUtil.getRiversideFolder()
+        if (!f.exists()) {
+            val rv = f.mkdir()
+            if (rv) {
+                //success
+            } else {
+
+            }
+
+        } else {
+        }
+
+        val photoFile = File(
+            f,
+            SimpleDateFormat(
+                "yyyy-MM-dd-HH-mm-ss-SSS",
+                Locale.US
+            ).format(System.currentTimeMillis()) + "." + ext
+        )
+        return photoFile
+    }
+
     override fun onClick(view: View) {
         when (view.id) {
             R.id.edit -> edit()
             R.id.capturePicture -> capturePicture()
             R.id.capturePictureSnapshot -> capturePictureSnapshot()
             R.id.captureVideo -> captureVideo()
+            R.id.stopVideo -> stopVideo()
             R.id.captureVideoSnapshot -> captureVideoSnapshot()
             R.id.toggleCamera -> toggleCamera()
             R.id.changeFilter -> changeCurrentFilter()
@@ -272,9 +403,16 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
         if (camera.mode == Mode.PICTURE) return run {
             message("Can't record HQ videos while in PICTURE mode.", false)
         }
+        message("Taking video", false)
         if (camera.isTakingPicture || camera.isTakingVideo) return
-        message("Recording for 5 seconds...", true)
-        camera.takeVideo(File(filesDir, "video.mp4"), 5000)
+        camera.takeVideo(File(filesDir, "video.mp4"))
+        camera.postDelayed({
+            setIcons()
+        }, 1000)
+    }
+
+    private fun stopVideo() {
+        camera.stopVideo()
     }
 
     private fun captureVideoSnapshot() {
@@ -323,8 +461,10 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
             val preview = camera.preview
             val wrapContent = value as Int == WRAP_CONTENT
             if (preview == Preview.SURFACE && !wrapContent) {
-                message("The SurfaceView preview does not support width or height changes. " +
-                        "The view will act as WRAP_CONTENT by default.", true)
+                message(
+                    "The SurfaceView preview does not support width or height changes. " +
+                            "The view will act as WRAP_CONTENT by default.", true
+                )
                 return false
             }
         }
@@ -334,11 +474,69 @@ class CameraActivity : AppCompatActivity(), View.OnClickListener, OptionView.Cal
         return true
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String?>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String?>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val valid = grantResults.all { it == PERMISSION_GRANTED }
         if (valid && !camera.isOpened) {
             camera.open()
         }
     }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, @Nullable data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE) {
+            if (SDK_INT >= Build.VERSION_CODES.R) {
+                if (Environment.isExternalStorageManager()) {
+                    // perform action when allow permission success
+                } else {
+                    Toast.makeText(this, "Allow permission for storage access!", Toast.LENGTH_SHORT)
+                        .show()
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        changeGalleryImage()
+        setIcons()
+    }
+
+    fun changeGalleryImage() {
+        val mFiles = FileUtil.findImageFileInDirectory(
+            FileUtil.getRiversideFolder().toString(),
+            arrayOf("png", "jpg", "mp4")
+        ) // make this as a util
+        if (mFiles.size > 0) {
+            Glide
+                .with(this)
+                .load(mFiles.last())
+                .apply(RequestOptions().circleCrop())
+                .into(findViewById(R.id.gallery))
+        }
+    }
+
+
+    fun setIcons() {
+        captureVideo?.post {
+            if (camera.isTakingVideo) {
+                capturePicture?.visibility = View.GONE
+                captureVideo?.visibility = View.GONE
+                stopVideo?.visibility = View.VISIBLE
+            } else if (camera.mode == Mode.VIDEO) {
+                capturePicture?.visibility = View.GONE
+                captureVideo?.visibility = View.VISIBLE
+                stopVideo?.visibility = View.GONE
+            } else {
+                capturePicture?.visibility = View.VISIBLE
+                captureVideo?.visibility = View.GONE
+                stopVideo?.visibility = View.GONE
+            }
+        }
+    }
+
 }

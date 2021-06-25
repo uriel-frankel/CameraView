@@ -18,6 +18,8 @@ android {
 
 dependencies {
     implementation(project(":cameraview"))
+    implementation("com.github.bumptech.glide:glide:4.7.1")
+    implementation ("androidx.viewpager2:viewpager2:1.0.0")
     implementation("androidx.appcompat:appcompat:1.2.0")
     implementation("com.google.android.material:material:1.2.0")
 }
